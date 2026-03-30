@@ -81,11 +81,16 @@ def search_web(query: str) -> str:
     try:
         results = tavily_client.search(query=query, max_results=5)
         formatted = []
+        urls = []
         for r in results.get("results", []):
             url = r["url"]
+            urls.append(url)
             _collected_urls.append(url)
-            formatted.append(f"Title: {r['title']}\nURL: {url}\nSnippet: {r['content'][:500]}")
-        return "\n\n---\n\n".join(formatted) if formatted else "No results found."
+            formatted.append(f"Title: {r['title']}\nSource URL: {url}\nSnippet: {r['content'][:500]}")
+        if not formatted:
+            return "No results found."
+        url_list = "\n".join(f"- {u}" for u in urls)
+        return "\n\n---\n\n".join(formatted) + f"\n\n[URLS FROM THIS SEARCH]\n{url_list}"
     except Exception as e:
         return f"Web search error: {str(e)}"
 
@@ -96,11 +101,16 @@ def search_reddit_sentiment(query: str) -> str:
     try:
         results = tavily_client.search(query=query, max_results=5, include_domains=["reddit.com"])
         formatted = []
+        urls = []
         for r in results.get("results", []):
             url = r["url"]
+            urls.append(url)
             _collected_urls.append(url)
-            formatted.append(f"Subreddit/URL: {url}\nContent: {r['content'][:600]}")
-        return "\n\n---\n\n".join(formatted) if formatted else "No Reddit results found."
+            formatted.append(f"Reddit URL: {url}\nContent: {r['content'][:600]}")
+        if not formatted:
+            return "No Reddit results found."
+        url_list = "\n".join(f"- {u}" for u in urls)
+        return "\n\n---\n\n".join(formatted) + f"\n\n[REDDIT URLS FROM THIS SEARCH]\n{url_list}"
     except Exception as e:
         return f"Reddit search error: {str(e)}"
 
@@ -179,8 +189,7 @@ After gathering all data, synthesize into a research summary with these clearly 
 [WEB SEARCH FINDINGS] — key facts, financials, strategy, competitive landscape
 [REDDIT SENTIMENT] — supply-side sentiment, common complaints, factual claims vs. venting
 [JOB POSTING SIGNALS] — hiring patterns and what they signal about strategy
-
-Include all relevant source URLs.""",
+[SOURCES] — Include ALL source URLs from your search results in this section. List every full URL returned by search_web and search_reddit_sentiment tools. Do NOT shorten or omit URLs. Each URL must be the complete link starting with https://.""",
         tools=[search_web, search_reddit_sentiment, search_job_postings],
     )
 
@@ -230,6 +239,8 @@ You MUST output valid JSON matching this exact schema:
   "data_sources_used": ["Web Search", "Reddit Sentiment", "Job Postings"],
   "sources": ["list of URLs"]
 }
+
+CRITICAL for the "sources" field: Copy ALL full URLs from the [SOURCES] section of the research into the "sources" array. These must be complete URLs (starting with https://), not shortened or domain-only. Include every URL — do not summarize, truncate, or omit any.
 
 Write like a senior strategy consultant. Use specific data points. Every insight should be actionable and grounded in the research data. Output ONLY the JSON, no other text.""",
 )
