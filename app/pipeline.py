@@ -1,11 +1,14 @@
 import os
 import json
+import logging
 import requests
 from typing import AsyncGenerator, Optional
 from dotenv import load_dotenv
 from agents import Agent, Runner, function_tool
 from tavily import TavilyClient
 from .models import MarketplaceAnalysis
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -87,11 +90,13 @@ def search_web(query: str) -> str:
             urls.append(url)
             _collected_urls.append(url)
             formatted.append(f"Title: {r['title']}\nSource URL: {url}\nSnippet: {r['content'][:500]}")
+        logger.info(f"[search_web] query={query!r} returned {len(urls)} URLs: {urls}")
         if not formatted:
             return "No results found."
         url_list = "\n".join(f"- {u}" for u in urls)
         return "\n\n---\n\n".join(formatted) + f"\n\n[URLS FROM THIS SEARCH]\n{url_list}"
     except Exception as e:
+        logger.error(f"[search_web] error: {e}")
         return f"Web search error: {str(e)}"
 
 
@@ -107,11 +112,13 @@ def search_reddit_sentiment(query: str) -> str:
             urls.append(url)
             _collected_urls.append(url)
             formatted.append(f"Reddit URL: {url}\nContent: {r['content'][:600]}")
+        logger.info(f"[search_reddit] query={query!r} returned {len(urls)} URLs: {urls}")
         if not formatted:
             return "No Reddit results found."
         url_list = "\n".join(f"- {u}" for u in urls)
         return "\n\n---\n\n".join(formatted) + f"\n\n[REDDIT URLS FROM THIS SEARCH]\n{url_list}"
     except Exception as e:
+        logger.error(f"[search_reddit] error: {e}")
         return f"Reddit search error: {str(e)}"
 
 
@@ -211,6 +218,8 @@ Analyze through these lenses:
 
 If a focus area was provided, weight your analysis toward that area.
 
+IMPORTANT: The research contains a [SOURCES] section with URLs. You MUST preserve this section exactly as-is at the end of your analysis. Copy it through unchanged — do not summarize, rewrite, or omit any URLs.
+
 Produce your analysis as structured sections matching the MarketplaceAnalysis schema fields. Be specific — cite data points, not vague generalizations. Write like a senior strategy consultant, not a generic AI.""",
 )
 
@@ -269,6 +278,12 @@ async def run_pipeline(company: str, marketplace_type: str, focus_area: Optional
         yield {"stage": "research", "status": "error", "message": f"Research failed: {str(e)}"}
         return
 
+    # Snapshot URLs collected by tools during research
+    collected_after_research = list(_collected_urls)
+    logger.info(f"[pipeline] _collected_urls has {len(collected_after_research)} URLs after research")
+    logger.info(f"[pipeline] Researcher output contains '[SOURCES]': {'[SOURCES]' in research_output}")
+    logger.info(f"[pipeline] Researcher output (last 500 chars): {research_output[-500:]}")
+
     yield {"stage": "research", "status": "complete", "message": "Research gathering complete."}
 
     # Stage 2: Analysis
@@ -294,10 +309,17 @@ Produce a comprehensive strategic analysis covering all framework dimensions."""
     # Stage 3: Writing
     yield {"stage": "writing", "status": "running", "message": "Writing strategic briefing..."}
 
+    # Build the URL list to inject directly into the Writer prompt
+    source_urls = list(dict.fromkeys(collected_after_research))
+    source_urls_text = "\n".join(f"- {u}" for u in source_urls) if source_urls else "- No URLs collected"
+
     writing_prompt = f"""Create the final structured JSON briefing for {company} ({marketplace_type}).
 
 Strategic analysis:
 {analysis_output}
+
+[SOURCES — copy these exactly into the "sources" JSON array]
+{source_urls_text}
 
 Output ONLY valid JSON matching the MarketplaceAnalysis schema."""
 
@@ -316,8 +338,13 @@ Output ONLY valid JSON matching the MarketplaceAnalysis schema."""
                 cleaned = cleaned[4:].strip()
 
         analysis_data = json.loads(cleaned)
-        # Override sources with the full URLs collected directly from tool results
-        analysis_data["sources"] = list(dict.fromkeys(_collected_urls))  # dedupe, preserve order
+        # Always override sources with the full URLs collected directly from tool results
+        # This is the authoritative source — never trust LLM-passed URLs
+        if collected_after_research:
+            analysis_data["sources"] = source_urls
+            logger.info(f"[pipeline] Injected {len(source_urls)} URLs into sources field")
+        else:
+            logger.warning("[pipeline] No URLs were collected by tools — sources will use Writer output")
         analysis = MarketplaceAnalysis(**analysis_data)
 
         yield {"stage": "writing", "status": "complete", "message": "Strategic briefing complete."}

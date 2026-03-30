@@ -1,9 +1,12 @@
 import os
 import json
+import logging
 import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
